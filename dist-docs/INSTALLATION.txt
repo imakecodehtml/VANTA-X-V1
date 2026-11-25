@@ -1,0 +1,10 @@
+VANTA X - Installation (Windows 10/11 x64)
+
+1. Copy the folder "VANTA X.vst3" to:
+   C:\Program Files\Common Files\VST3\
+2. Open FL Studio > Options > Manage plugins > Find plugins (or "Start scan").
+3. Add VANTA X from Plugin database > Installed > Generators > VST3.
+
+User content (presets, samples, wavetables) is stored in:
+   %APPDATA%\VANTA X\
+VANTA X ships with NO presets, samples or wavetables. You create and import your own.
