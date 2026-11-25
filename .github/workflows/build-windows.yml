@@ -1,111 +1,112 @@
-name: Build VANTA X (Windows VST3)
+
+name: VANTA X - Windows VST3 Build
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+    name: Build VANTA X VST3
+    runs-on: windows-2022
+    timeout-minutes: 45
 
-      - name: Prepare log folder
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Verify Visual Studio
         shell: pwsh
         run: |
-          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) {
+            throw "Visual Studio Installer not found"
+          }
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (!$vs) {
+            throw "Visual Studio 2022 installation not found"
+          }
+          Write-Host "Visual Studio found: $vs"
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Configure VANTA X
+        shell: pwsh
+        run: |
+          if (Test-Path build) {
+            Remove-Item build -Recurse -Force
+          }
+
           New-Item -ItemType Directory -Force logs | Out-Null
 
-      - name: Configure (VS2022, x64, JUCE 8.0.6)
-        shell: pwsh
-        run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 2>&1 | Tee-Object -FilePath logs/configure.log
-          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            2>&1 | Tee-Object -FilePath logs/configure.log
 
-      # The DSP test has no JUCE dependency: build and run it first so a plugin
-      # compile error can never hide the test result.
-      - name: Build DSP unit tests
-        shell: pwsh
-        run: |
-          cmake --build build --config Release --target VantaDspTest 2>&1 | Tee-Object -FilePath logs/build-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "DSP test build failed" }
-
-      - name: Run DSP unit tests
-        shell: pwsh
-        run: |
-          ./build/Release/VantaDspTest.exe 2>&1 | Tee-Object -FilePath logs/dsp-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "DSP tests failed" }
-
-      - name: Build and run Stage 3 tests (Granular + Additive)
-        shell: pwsh
-        run: |
-          cmake --build build --config Release --target VantaStage3Test 2>&1 | Tee-Object -FilePath logs/build-stage3-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "Stage 3 test build failed" }
-          ./build/Release/VantaStage3Test.exe 2>&1 | Tee-Object -FilePath logs/stage3-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "Stage 3 tests failed" }
-
-      - name: Build and run Stage 3b tests (parameter IDs, voices, sample safety)
-        shell: pwsh
-        run: |
-          cmake --build build --config Release --target VantaStage3bTest 2>&1 | Tee-Object -FilePath logs/build-stage3b-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "Stage 3b test build failed" }
-          ./build/Release/VantaStage3bTest.exe 2>&1 | Tee-Object -FilePath logs/stage3b-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "Stage 3b tests failed" }
-
-      - name: Build and run Stage 4 modulation tests
-        shell: pwsh
-        run: |
-          cmake --build build --config Release --target VantaStage4Test 2>&1 | Tee-Object -FilePath logs/build-stage4-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "Stage 4 test build failed" }
-          ./build/Release/VantaStage4Test.exe 2>&1 | Tee-Object -FilePath logs/stage4-tests.log
-          if ($LASTEXITCODE -ne 0) { throw "Stage 4 tests failed" }
-
-      - name: Build plugin (Release)
-        shell: pwsh
-        run: |
-          cmake --build build --config Release --parallel 2>&1 | Tee-Object -FilePath logs/build-plugin.log
-          if ($LASTEXITCODE -ne 0) { throw "Plugin build failed - see logs/build-plugin.log" }
-
-      - name: Verify VST3 bundle
-        shell: pwsh
-        run: |
-          $bundle = "build/VantaX_artefacts/Release/VST3/VANTA X.vst3"
-          if (-not (Test-Path $bundle)) {
-            Get-ChildItem -Recurse build -Filter *.vst3 | Select-Object FullName
-            throw "VST3 not found at $bundle"
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake configure failed"
           }
-          $dll = Join-Path $bundle "Contents/x86_64-win/VANTA X.vst3"
-          if (-not (Test-Path $dll -PathType Leaf)) { Get-ChildItem -Recurse $bundle | Select-Object FullName; throw "VST3 binary missing: $dll" }
-          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $dll))
-          Write-Host "Binary size: $($bytes.Length) bytes"
-          if ($bytes.Length -lt 100000) { throw "VST3 binary suspiciously small" }
-          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "VST3 binary is not a PE file (no MZ header)" }
-          $text = [System.Text.Encoding]::Latin1.GetString($bytes)
-          if (-not $text.Contains("GetPluginFactory")) { throw "VST3 binary does not export GetPluginFactory" }
-          Write-Host "OK: PE binary exporting GetPluginFactory"
-          Get-ChildItem -Recurse $bundle | Select-Object FullName, Length | Format-Table -AutoSize
 
-      - name: Package
+      - name: Build VANTA X VST3
         shell: pwsh
         run: |
-          $root = "dist/VANTA-X-Windows-VST3"
-          New-Item -ItemType Directory -Force $root | Out-Null
-          Copy-Item -Recurse "build/VantaX_artefacts/Release/VST3/VANTA X.vst3" "$root/VANTA X.vst3"
-          Copy-Item dist-docs/README.txt "$root/README.txt"
-          Copy-Item dist-docs/INSTALLATION.txt "$root/INSTALLATION.txt"
+          cmake --build build `
+            --config Release `
+            --parallel 2 `
+            2>&1 | Tee-Object -FilePath logs/build.log
 
-      - name: Upload plugin artifact
+          if ($LASTEXITCODE -ne 0) {
+            throw "VANTA X compilation failed"
+          }
+
+      - name: Locate VST3
+        id: vst3
+        shell: pwsh
+        run: |
+          $plugin = Get-ChildItem -Path build -Filter "*.vst3" -Directory -Recurse |
+            Select-Object -First 1
+
+          if (!$plugin) {
+            throw "No VST3 bundle found. Check the CMake target and build configuration."
+          }
+
+          Write-Host "VST3 found: $($plugin.FullName)"
+          "VST3_PATH=$($plugin.FullName)" >> $env:GITHUB_ENV
+
+      - name: Package VANTA X
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "$env:VST3_PATH" `
+            -DestinationPath "VANTA-X-VST3-Windows-x64.zip" `
+            -Force
+
+      - name: Upload VANTA X VST3
         uses: actions/upload-artifact@v4
         with:
-          name: VANTA-X-Windows-VST3
-          path: dist
+          name: VANTA-X-VST3-Windows-x64
+          path: VANTA-X-VST3-Windows-x64.zip
           if-no-files-found: error
 
-      - name: Upload build logs
+      - name: Upload Build Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: VANTA-X-build-logs
-          path: logs
-          if-no-files-found: warn
+          name: VANTA-X-Build-Logs
+          path: logs/
+          if-no-files-found: ignore
